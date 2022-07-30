@@ -1,0 +1,96 @@
+version: '1.0'
+stages:
+  - clone
+  - lint
+  - scan   
+  # - test  # TODO: wire up terratest
+  - release
+steps:
+
+  clone:
+    stage: clone
+    title: "Cloning repo..."
+    type: git-clone
+    repo: '${{CF_REPO_OWNER}}/${{CF_REPO_NAME}}'
+    revision: '${{CF_REVISION}}'
+
+  lint_and_style:
+    title: "Running fmt/validate/tflint in parallel"
+    type: parallel
+    stage: lint
+    steps:
+      terraform_fmt:
+        image: hashicorp/terraform:0.13.4
+        title: "Run terraform fmt"
+        stage: lint
+        working_directory: ${{clone}}
+        commands:
+          - export AWS_REGION=us-east-1
+          - terraform init -backend=false
+          - terraform fmt --check
+      terraform_validate:
+        image: hashicorp/terraform:0.13.4
+        title: "Run terraform validate"
+        stage: lint
+        working_directory: ${{clone}}
+        commands:
+          - export AWS_REGION=us-east-1
+          - terraform init -backend=false
+          - terraform validate
+      tflinting:
+        image: wata727/tflint
+        title: "Run tflint"
+        stage: lint
+        working_directory: ${{clone}}
+        commands:
+          - tflint --force
+    when:
+      branch:
+        only:
+          - /^feature\/*/i  
+
+  checkov:
+    title: "Checkov static code analysis"
+    image: bridgecrew/checkov:1.0.580
+    stage: scan
+    working_directory: ${{clone}}
+    commands:
+      - checkov -d .
+    when:
+      branch:
+        only:
+          - /^feature\/*/i  
+
+
+  get_previous_tag:
+    stage: release
+    title: "Getting previous release tag"
+    image: alpine/git:latest
+    commands:
+      - cd ${{CF_REPO_NAME}}
+      - LATEST_TAG=$(git tag | tail -n 1)
+      - CURRENT=${LATEST_TAG:-v1.13.-1} && echo ${CURRENT}
+      - MAJOR=$(echo ${CURRENT} | cut -d. -f2) && echo $MAJOR
+      - MINOR=$(echo ${CURRENT} | cut -d. -f3) && echo $MINOR
+      - NEW=$((MINOR+1))
+      - cf_export INCREMENTED="v1.${MAJOR}.${NEW}"
+      - echo New Version Tag ${INCREMENTED}
+    when:
+      branch:
+        only:
+          - main
+  github_release:
+    stage: release
+    type: github-release
+    repo_owner: ${{CF_REPO_OWNER}}
+    repo_name: ${{CF_REPO_NAME}}
+    title: Create new module release
+    arguments:
+      release_name: Release ${{INCREMENTED}}
+      release_tag: ${{INCREMENTED}}
+    when:
+      branch:
+        only:
+          - main
+  # Future state:
+  # update module registry static site with latest version and such

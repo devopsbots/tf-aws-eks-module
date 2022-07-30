@@ -1,0 +1,45 @@
+on:
+  push:
+    branches:
+      - feature/bootstrap
+jobs:
+  create_pipeline:
+    name: Create Codefresh pipeline
+    runs-on: ubuntu-18.04
+    if: github.run_number == '1'
+    steps:
+    - uses: actions/checkout@v2
+    - name: Use Node.js 12.x
+      uses: actions/setup-node@v1
+      with:
+        node-version: 12.x
+    - run: npm install -g codefresh
+    - name: Create CF Auth
+      run: codefresh auth create-context --api-key $(echo "$API_B64" | base64 --decode)
+      env:
+        API_B64: ${{ secrets.CF_BASE64 }}
+    - name: Update pipeline template
+      run: sed -i "s/PROJECT_NAME_PLACEHOLDER/$(echo $GITHUB_REPOSITORY | cut -d'/' -f 2)/g"  pipeline.yml && codefresh create pipeline -f pipeline.yml
+  branch_protection:
+    name: Update branch protection
+    runs-on: ubuntu-latest
+    if: github.run_number == '1'
+    steps:
+      - uses: actions/github-script@v2
+        with:
+          github-token: ${{ secrets.BRANCH_PROTECTION_TOKEN }}
+          previews: luke-cage-preview
+          script: |
+            // Branch protection
+            const result = await github.repos.updateBranchProtection({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+              required_status_checks: null,
+              restrictions: null,
+              enforce_admins: null,
+              required_pull_request_reviews: {
+                required_approving_review_count: 1
+              }
+            })
+            console.log("Result:", result)
